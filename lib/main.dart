@@ -509,7 +509,7 @@ class _HomePageState extends State<HomePage> {
     final list = await Db.nearby(_current!, maxKm: 3);
     setState(() => _nearby = list);
   }
-  
+
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
