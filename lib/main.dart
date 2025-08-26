@@ -88,6 +88,7 @@
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -508,7 +509,7 @@ class _HomePageState extends State<HomePage> {
     final list = await Db.nearby(_current!, maxKm: 3);
     setState(() => _nearby = list);
   }
-
+  
   @override
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
@@ -903,11 +904,31 @@ void _showNavSheet(BuildContext context, LatLng dest) {
 }
 
 Future<void> _openGoogleMaps(LatLng dest) async {
-  final uri = Uri.parse(
-    'https://www.google.com/maps/dir/?api=1&destination=${dest.latitude},${dest.longitude}&travelmode=driving',
+  final lat = dest.latitude;
+  final lng = dest.longitude;
+
+  // Prefer native apps
+  final androidUri = Uri.parse('geo:$lat,$lng?q=$lat,$lng'); // Android
+  final iosUri = Uri.parse(
+    'comgooglemaps://?daddr=$lat,$lng&directionsmode=driving',
+  ); // iOS
+  // Fallback to web (opens browser if app not available)
+  final webUri = Uri.parse(
+    'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
   );
-  if (await canLaunchUrl(uri)) {
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+  try {
+    if (Platform.isAndroid && await canLaunchUrl(androidUri)) {
+      await launchUrl(androidUri, mode: LaunchMode.externalApplication);
+      return;
+    }
+    if (Platform.isIOS && await canLaunchUrl(iosUri)) {
+      await launchUrl(iosUri, mode: LaunchMode.externalApplication);
+      return;
+    }
+    await launchUrl(webUri, mode: LaunchMode.externalApplication);
+  } catch (e) {
+    debugPrint('Could not launch maps: $e');
   }
 }
 

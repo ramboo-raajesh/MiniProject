@@ -1,0 +1,91 @@
+this login setup works fine, need some changes
+
+-while creating account it pops-up 'email no confirmed' instead I need 'Verification Mail Sent' and after clicking 'confirm mail' on the mail it showing 404 error on localhost port:3000 there I need a text 'Email verified continue with login'.
+
+-after clicking Park button it's showing a market with price tag on it, by clicking the marker it shows the Space details, I need a separate button called 'Book now' below the marker to show the details.
+
+-after clicking Book & Navigate, Open in Google Maps appears but it doesn't open google map fix it.
+
+-after clicking a Post a space button it asks for space details where the Location option is only 'Use current' available, I need a extra list there called 'Another Location' by clicking this user can select wherever place they want by using integrated map on this app.
+
+-after clicking profile section it only shows e=mail id and Your Posted Spaces only. I need a general section which covers User Name, Phone Number, Address. Another section called My Vehicles where Vehicle colour, Model Name, Vehicle Number, Licence Number. Another section called My Spaces where the Co-ordinates, Address, and space's details are to be there.
+
+-all the posted spaces are visible to all the users, booked spaces are needs to be in grey colour and open spaces are needs to be in yellow colour
+
+-after clicking Book & Navigate, the space owner get notified with a notification. 
+
+-change the application name, in home page it displaying "P" and "P2P Parking" instead I need 'Park Here'
+
+-change the app theme into yellow [#FFEF00] and white theme
+
+-add after clicking Open in Google Maps, the app opens and google map for navigating and here in our app user prompted with two button Cancel and Reached, if user clicks the cancel it returns to the home page and if user clicked to the Reached the timer starts inside app, the timers needs to show on the top left of the home wall page, after clicking the timer user again prompted with a option Take Vehicle, if he clicks the Take Vehicle the Pay option needs to be shown with correct amount Hours * Posted amount to pay.
+
+
+============================
+
+1. Account Creation & Email Verification
+
+On signup, show message: “Verification Mail Sent” (instead of “email not confirmed”).
+
+After user clicks “Confirm Mail” link → show page: “Email verified, continue with login” (instead of 404).
+
+2. Parking Space Booking Flow
+
+After pressing Park button, map shows marker(s) with price tag.
+
+When user clicks a marker → show space details + new button: “Book Now” below details.
+
+After clicking Book & Navigate:
+
+Fix issue → app should open Google Maps directly for navigation.
+
+Also inside app, prompt user with Cancel or Reached buttons.
+
+If Cancel → return to Home page.
+
+If Reached → start a timer (displayed top-left on Home page).
+
+On clicking the timer → prompt with Take Vehicle.
+
+If user selects Take Vehicle → show Pay option = (Hours * Posted Amount).
+
+3. Post a Space
+
+Current option = only “Use current location.”
+
+Add new option: “Another Location” → allow user to pick location manually using integrated map.
+
+4. Profile Section
+
+Expand profile page into sections:
+
+General: User Name, Phone Number, Address.
+
+My Vehicles: Vehicle Colour, Model Name, Vehicle Number, Licence Number.
+
+My Spaces: Coordinates, Address, Space details.
+
+5. Map Display Rules
+
+All posted spaces visible to all users.
+
+Booked spaces = Grey color markers.
+
+Open spaces = Yellow color markers (#FFEF00).
+
+6. Notifications
+
+When a user clicks Book & Navigate, send a notification to the space owner.
+
+7. Branding & Theme
+
+Change app name everywhere → “Park Here” (replace “P” / “P2P Parking”).
+
+Change app theme → Yellow (#FFEF00) and White.
+
+
+
+
+
+
+
