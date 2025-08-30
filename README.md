@@ -1,17 +1,26 @@
-# parkhere
+# Parkhere
 
-A new Flutter project, It's peer to peer parking space sharing application where users can find parking spaces nearby using map and park their vehicles for a affordable payment
+A new Flutter project, It's peer to peer parking space sharing application where users can find parking spaces nearby using map and park their vehicles for a affordable payment.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+-Clone this Repo
 
-A few resources to get you started if this is your first Flutter project:
+-run  flutter clear
 
-* [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-* [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+-run  flutter pubsub
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+-run  flutter run
+
+
+
+choose the connected devices to run the application, it supports
+
+-Android
+
+-iOS
+
+-Windows and 
+
+-Browsers
 
