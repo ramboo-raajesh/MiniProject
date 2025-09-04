@@ -115,12 +115,46 @@ class ParkingApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const seedColor = Color(0xFFFFEF00); // yellow #FFEF00
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: seedColor,
+      brightness: Brightness.light,
+    );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'P2P Parking',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorScheme: colorScheme,
         useMaterial3: true,
+        scaffoldBackgroundColor: Colors.white,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black,
+          elevation: 0,
+          iconTheme: IconThemeData(color: Colors.black),
+          titleTextStyle: TextStyle(
+            color: Colors.black,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textTheme: ThemeData.light().textTheme.apply(
+          bodyColor: Colors.black,
+          displayColor: Colors.black,
+        ),
+        iconTheme: const IconThemeData(color: Colors.black),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: seedColor,
+            foregroundColor: Colors.black,
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: seedColor,
+            foregroundColor: Colors.black,
+          ),
+        ),
       ),
       initialRoute: '/login',
       routes: {
@@ -301,7 +335,7 @@ class Db {
             })
             .select()
             .single();
-    return Booking.fromMap(row as Map<String, dynamic>);
+    return Booking.fromMap(row);
   }
 }
 
