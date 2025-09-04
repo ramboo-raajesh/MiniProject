@@ -319,6 +319,16 @@ class Db {
     await c.from('spaces').insert(s.toInsert());
   }
 
+  // new: update an existing space
+  static Future<void> updateSpace(ParkingSpace s) async {
+    await c.from('spaces').update(s.toInsert()).eq('id', s.id);
+  }
+
+  // new: delete a space by id
+  static Future<void> deleteSpace(String id) async {
+    await c.from('spaces').delete().eq('id', id);
+  }
+
   static Future<Booking> createBooking({
     required String spaceId,
     required String vehicleType,
@@ -409,7 +419,11 @@ class _LoginPageState extends State<LoginPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.local_parking, size: 64),
+                  const Icon(
+                    Icons.local_parking,
+                    size: 64,
+                    color: Colors.black,
+                  ),
                   const SizedBox(height: 12),
                   Text(
                     'P2P Parking',
@@ -662,7 +676,10 @@ class _HomePageState extends State<HomePage> {
                                         _mapController.move(_current!, 16);
                                         await _fetchNearby();
                                       },
-                                      icon: const Icon(Icons.directions_car),
+                                      icon: const Icon(
+                                        Icons.directions_car,
+                                        color: Colors.black,
+                                      ),
                                       label: const Text('Park'),
                                     ),
                                   ),
@@ -670,13 +687,22 @@ class _HomePageState extends State<HomePage> {
                                   Expanded(
                                     child: OutlinedButton.icon(
                                       onPressed:
-                                          () => Navigator.of(
-                                            context,
-                                          ).pushNamed('/post').then((_) async {
-                                            await _fetchNearby();
-                                            setState(() {});
-                                          }),
-                                      icon: const Icon(Icons.add_location_alt),
+                                          () => Navigator.of(context)
+                                              .push(
+                                                MaterialPageRoute(
+                                                  builder:
+                                                      (_) =>
+                                                          const PostSpacePage(),
+                                                ),
+                                              )
+                                              .then((_) async {
+                                                await _fetchNearby();
+                                                setState(() {});
+                                              }),
+                                      icon: const Icon(
+                                        Icons.add_location_alt,
+                                        color: Colors.black,
+                                      ),
                                       label: const Text('Post'),
                                     ),
                                   ),
@@ -895,7 +921,7 @@ class _SpaceSheetState extends State<_SpaceSheet> {
                           if (mounted) setState(() => _booking = false);
                         }
                       },
-              icon: const Icon(Icons.check_circle),
+              icon: const Icon(Icons.check_circle, color: Colors.black),
               label: Text(_booking ? 'Booking...' : 'Book & Navigate'),
             ),
           ),
@@ -925,7 +951,7 @@ void _showNavSheet(BuildContext context, LatLng dest) {
                   Expanded(
                     child: FilledButton.icon(
                       onPressed: () => _openGoogleMaps(dest),
-                      icon: const Icon(Icons.navigation),
+                      icon: const Icon(Icons.navigation, color: Colors.black),
                       label: const Text('Open in Google Maps'),
                     ),
                   ),
@@ -983,7 +1009,8 @@ class _InfoChip extends StatelessWidget {
 // ------------------------------ Post Space ---------------------------------
 
 class PostSpacePage extends StatefulWidget {
-  const PostSpacePage({super.key});
+  final ParkingSpace? existing;
+  const PostSpacePage({this.existing, super.key});
   @override
   State<PostSpacePage> createState() => _PostSpacePageState();
 }
@@ -999,6 +1026,24 @@ class _PostSpacePageState extends State<PostSpacePage> {
   LatLng? _useLocation;
   bool _saving = false;
   final Set<String> _allowed = {'2w', '3w', '4w'};
+
+  @override
+  void initState() {
+    super.initState();
+    final e = widget.existing;
+    if (e != null) {
+      _title.text = e.title;
+      _dimensions.text = e.dimensions;
+      _price.text = e.pricePerHour.toStringAsFixed(0);
+      _gated = e.gated;
+      _guarded = e.guarded;
+      _cover = e.coverType;
+      _useLocation = e.location;
+      _allowed
+        ..clear()
+        ..addAll(e.allowedTypes);
+    }
+  }
 
   Future<void> _getCurrent() async {
     try {
@@ -1025,7 +1070,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
     try {
       final uid = Supabase.instance.client.auth.currentUser!.id;
       final space = ParkingSpace(
-        id: 'temp',
+        id: widget.existing?.id ?? 'temp',
         title: _title.text.trim(),
         ownerUserId: uid,
         pricePerHour: double.tryParse(_price.text.trim()) ?? 50,
@@ -1036,12 +1081,22 @@ class _PostSpacePageState extends State<PostSpacePage> {
         coverType: _cover,
         allowedTypes: _allowed.toList(),
       );
-      await Db.insertSpace(space);
-      if (!mounted) return;
-      Navigator.pop(context);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Space posted!')));
+
+      if (widget.existing == null) {
+        await Db.insertSpace(space);
+        if (!mounted) return;
+        Navigator.pop(context);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Space posted!')));
+      } else {
+        await Db.updateSpace(space);
+        if (!mounted) return;
+        Navigator.pop(context);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Space updated!')));
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -1056,7 +1111,9 @@ class _PostSpacePageState extends State<PostSpacePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Post a Space')),
+      appBar: AppBar(
+        title: Text(widget.existing == null ? 'Post a Space' : 'Edit Space'),
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1170,7 +1227,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
                   ),
                   trailing: OutlinedButton.icon(
                     onPressed: _getCurrent,
-                    icon: const Icon(Icons.my_location),
+                    icon: const Icon(Icons.my_location, color: Colors.black),
                     label: const Text('Use Current'),
                   ),
                 ),
@@ -1179,11 +1236,15 @@ class _PostSpacePageState extends State<PostSpacePage> {
                   width: double.infinity,
                   child: FilledButton.icon(
                     onPressed: _saving ? null : _save,
-                    icon: const Icon(Icons.upload),
+                    icon: const Icon(Icons.upload, color: Colors.black),
                     label:
                         _saving
                             ? const Text('Posting...')
-                            : const Text('Post Space'),
+                            : Text(
+                              widget.existing == null
+                                  ? 'Post Space'
+                                  : 'Save Changes',
+                            ),
                   ),
                 ),
               ],
@@ -1263,7 +1324,17 @@ class _ProfilePageState extends State<ProfilePage> {
             if (_mine.isEmpty)
               const Text("You haven't posted any spaces yet.")
             else
-              ..._mine.map((s) => _SpaceListTile(space: s)),
+              ..._mine.map(
+                (s) => _SpaceListTile(
+                  space: s,
+                  onDeleted: () async {
+                    await _load();
+                  },
+                  onEdited: () async {
+                    await _load();
+                  },
+                ),
+              ),
           ],
         ),
       ),
@@ -1273,20 +1344,87 @@ class _ProfilePageState extends State<ProfilePage> {
 
 class _SpaceListTile extends StatelessWidget {
   final ParkingSpace space;
-  const _SpaceListTile({required this.space});
+  final VoidCallback? onDeleted;
+  final VoidCallback? onEdited;
+  const _SpaceListTile({required this.space, this.onDeleted, this.onEdited});
+
   @override
   Widget build(BuildContext context) {
     final rs = NumberFormat.currency(locale: 'en_IN', symbol: '₹');
     return Card(
       child: ListTile(
-        leading: const Icon(Icons.local_parking),
+        leading: const Icon(Icons.local_parking, color: Colors.black),
         title: Text(space.title),
         subtitle: Text(
           '${space.dimensions} • ${space.coverType == CoverType.covered ? 'Covered' : 'Open'}\n'
           '${space.gated ? 'Gated' : 'Not gated'} • ${space.guarded ? 'Guarded' : 'Un-guarded'}\n'
           'Allows: ${space.allowedTypes.join(', ')}',
         ),
-        trailing: Text('${rs.format(space.pricePerHour)}/hr'),
+        trailing: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${rs.format(space.pricePerHour)}/hr',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            PopupMenuButton<String>(
+              padding: EdgeInsets.zero,
+              onSelected: (v) async {
+                if (v == 'delete') {
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder:
+                        (ctx) => AlertDialog(
+                          title: const Text('Delete post'),
+                          content: const Text(
+                            'Are you sure you want to delete this space?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Delete'),
+                            ),
+                          ],
+                        ),
+                  );
+                  if (ok == true) {
+                    try {
+                      await Db.deleteSpace(space.id);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Post deleted')),
+                      );
+                      onDeleted?.call();
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Delete failed: $e')),
+                      );
+                    }
+                  }
+                } else if (v == 'edit') {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => PostSpacePage(existing: space),
+                    ),
+                  );
+                  onEdited?.call();
+                }
+              },
+              itemBuilder:
+                  (_) => const [
+                    PopupMenuItem(value: 'edit', child: Text('Edit')),
+                    PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+              child: const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Icon(Icons.more_vert, color: Colors.black),
+              ),
+            ),
+          ],
+        ),
         isThreeLine: true,
       ),
     );
