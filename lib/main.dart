@@ -1326,7 +1326,6 @@ class _MapPickerPageState extends State<MapPickerPage> {
       appBar: AppBar(
         title: const Text('Select location'),
         actions: [
-          // Confirm button restored
           TextButton(
             onPressed: _confirmAndPop,
             child: const Text('Confirm', style: TextStyle(color: Colors.black)),
@@ -1340,11 +1339,11 @@ class _MapPickerPageState extends State<MapPickerPage> {
             options: MapOptions(
               initialCenter: _picked,
               initialZoom: 16,
-              // Keep _picked equal to the current map center so the center pin is selection
-              onPositionChanged: (mapPosition, _) {
+              // Update _picked ONLY on user gesture (prevents programmatic jumps)
+              onPositionChanged: (mapPosition, hasGesture) {
                 final center = mapPosition.center;
-                if (center != null) {
-                  // Only update state if changed to avoid excessive rebuilds
+                if (center != null && hasGesture == true) {
+                  // only update on user gesture to prevent background/programmatic moves
                   if (center.latitude != _picked.latitude ||
                       center.longitude != _picked.longitude) {
                     setState(() => _picked = center);
@@ -1396,13 +1395,14 @@ class _MapPickerPageState extends State<MapPickerPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _confirmAndPop, // returns current _picked
+        onPressed: _confirmAndPop,
         label: const Text('Use this location'),
         icon: const Icon(Icons.check),
       ),
     );
   }
 }
+
 // ------------------------------ Profile Page ------------------------------
 
 class ProfilePage extends StatefulWidget {
