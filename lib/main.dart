@@ -7,85 +7,6 @@
 // - One-tap navigation using Google Maps (via URL scheme) to the booked spot
 // - Map UI uses OpenStreetMap tiles via flutter_map (no API key needed)
 //
-// ----------------------------- Dependencies ------------------------------
-// In pubspec.yaml under dependencies:
-//   flutter:
-//     sdk: flutter
-//   cupertino_icons: ^1.0.2
-//   flutter_map: ^7.0.2
-//   latlong2: ^0.9.1
-//   geolocator: ^13.0.1
-//   intl: ^0.19.0
-//   uuid: ^4.4.2
-//   supabase_flutter: ^2.5.0
-//   url_launcher: ^6.3.0
-//
-// Android permissions:
-//   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-//   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-// iOS Info.plist:
-//   NSLocationWhenInUseUsageDescription = "This app needs location to find and post parking spaces."
-//
-// ----------------------------- Supabase Setup -----------------------------
-// 1) Create a Supabase project (https://supabase.com)
-// 2) Get your Project URL and anon key; paste into SUPABASE_URL and SUPABASE_ANON below.
-// 3) Run the SQL in your Supabase SQL editor:
-//   -- tables
-//   create table if not exists profiles (
-//     id uuid primary key references auth.users on delete cascade,
-//     name text,
-//     email text unique,
-//     avatar_url text,
-//     created_at timestamp with time zone default now()
-//   );
-//   create table if not exists spaces (
-//     id uuid primary key default gen_random_uuid(),
-//     owner_user_id uuid references auth.users(id) on delete cascade,
-//     title text not null,
-//     price_per_hour numeric not null,
-//     lat double precision not null,
-//     lng double precision not null,
-//     dimensions text,
-//     gated boolean default false,
-//     guarded boolean default false,
-//     cover_type text check (cover_type in ('open','covered')) default 'covered',
-//     allowed_types text[] default array['2w','3w','4w'],
-//     created_at timestamp with time zone default now()
-//   );
-//   create table if not exists bookings (
-//     id uuid primary key default gen_random_uuid(),
-//     space_id uuid references spaces(id) on delete cascade,
-//     booker_user_id uuid references auth.users(id) on delete cascade,
-//     vehicle_type text check (vehicle_type in ('2w','3w','4w')) not null,
-//     status text check (status in ('pending','confirmed','completed','cancelled')) default 'confirmed',
-//     start_time timestamp with time zone default now(),
-//     end_time timestamp with time zone,
-//     created_at timestamp with time zone default now()
-//   );
-//
-//   -- RLS
-//   alter table profiles enable row level security;
-//   alter table spaces enable row level security;
-//   alter table bookings enable row level security;
-//
-//   -- Policies
-//   create policy "profiles self access" on profiles
-//     for select using (auth.uid() = id);
-//   create policy "profiles upsert self" on profiles
-//     for insert with check (auth.uid() = id);
-//
-//   create policy "spaces readable to all" on spaces for select using (true);
-//   create policy "spaces insert by auth" on spaces for insert with check (auth.role() = 'authenticated');
-//   create policy "spaces owner update" on spaces for update using (auth.uid() = owner_user_id);
-//
-//   create policy "bookings select own or owner" on bookings for select using (
-//     auth.uid() = booker_user_id or auth.uid() in (select owner_user_id from spaces where spaces.id = bookings.space_id)
-//   );
-//   create policy "bookings insert by auth" on bookings for insert with check (auth.role() = 'authenticated');
-//   create policy "bookings update own" on bookings for update using (auth.uid() = booker_user_id);
-//
-// --------------------------- End of setup notes ---------------------------
-
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:io' show Platform;
@@ -182,6 +103,7 @@ class ParkingSpace {
   bool guarded;
   CoverType coverType;
   List<String> allowedTypes; // '2w','3w','4w'
+  String contactPhone; // poster's phone number
 
   ParkingSpace({
     required this.id,
@@ -194,6 +116,7 @@ class ParkingSpace {
     required this.guarded,
     required this.coverType,
     required this.allowedTypes,
+    required this.contactPhone,
   });
 
   factory ParkingSpace.fromMap(Map<String, dynamic> m) => ParkingSpace(
@@ -213,6 +136,7 @@ class ParkingSpace {
             ? CoverType.covered
             : CoverType.open,
     allowedTypes: List<String>.from(m['allowed_types'] ?? ['2w', '3w', '4w']),
+    contactPhone: (m['contact_phone'] ?? '') as String,
   );
 
   Map<String, dynamic> toInsert() => {
@@ -226,6 +150,7 @@ class ParkingSpace {
     'guarded': guarded,
     'cover_type': coverType == CoverType.covered ? 'covered' : 'open',
     'allowed_types': allowedTypes,
+    'contact_phone': contactPhone,
   };
 }
 
@@ -895,39 +820,90 @@ class _SpaceSheetState extends State<_SpaceSheet> {
             ],
           ),
           const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed:
-                  _booking
-                      ? null
-                      : () async {
-                        setState(() => _booking = true);
-                        try {
-                          final b = await Db.createBooking(
-                            spaceId: s.id,
-                            vehicleType: widget.vehicleType,
-                          );
-                          if (!mounted) return;
-                          Navigator.pop(context);
-                          _showNavSheet(context, s.location);
-                        } catch (e) {
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Booking failed: $e')),
-                            );
-                          }
-                        } finally {
-                          if (mounted) setState(() => _booking = false);
-                        }
-                      },
-              icon: const Icon(Icons.check_circle, color: Colors.black),
-              label: Text(_booking ? 'Booking...' : 'Book & Navigate'),
-            ),
+          // Replaced single button with Book & Navigate + Contact button
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed:
+                      _booking
+                          ? null
+                          : () async {
+                            setState(() => _booking = true);
+                            try {
+                              final b = await Db.createBooking(
+                                spaceId: s.id,
+                                vehicleType: widget.vehicleType,
+                              );
+                              if (!mounted) return;
+                              Navigator.pop(context);
+                              _showNavSheet(context, s.location);
+                            } catch (e) {
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Booking failed: $e')),
+                                );
+                              }
+                            } finally {
+                              if (mounted) setState(() => _booking = false);
+                            }
+                          },
+                  icon: const Icon(Icons.check_circle, color: Colors.black),
+                  label: Text(_booking ? 'Booking...' : 'Book & Navigate'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    final phone = s.contactPhone.trim();
+                    if (phone.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Owner has not provided a phone number',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    _dialOwner(phone);
+                  },
+                  icon: const Icon(Icons.call, color: Colors.black),
+                  label: const Text('Contact'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _dialOwner(String phone) async {
+    var normalized = phone.trim();
+    if (normalized.isEmpty) return;
+
+    if (!normalized.startsWith('+')) {
+      normalized = normalized.replaceAll(RegExp(r'\D'), '');
+    } else {
+      normalized = '+' + normalized.substring(1).replaceAll(RegExp(r'\D'), '');
+    }
+
+    final uri = Uri.parse('tel:$normalized');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Cannot open dialer on this device')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to open dialer: $e')));
+    }
   }
 }
 
@@ -1020,6 +996,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
   final _title = TextEditingController(text: 'My Spare Spot');
   final _dimensions = TextEditingController(text: '5.0m x 2.5m');
   final _price = TextEditingController(text: '50');
+  final _phone = TextEditingController(); // NEW: contact phone input
   bool _gated = true;
   bool _guarded = false;
   CoverType _cover = CoverType.covered;
@@ -1042,6 +1019,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
       _allowed
         ..clear()
         ..addAll(e.allowedTypes);
+      _phone.text = e.contactPhone; // load existing phone when editing
     }
   }
 
@@ -1080,6 +1058,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
         guarded: _guarded,
         coverType: _cover,
         allowedTypes: _allowed.toList(),
+        contactPhone: _phone.text.trim(), // NEW: save contact phone
       );
 
       if (widget.existing == null) {
@@ -1154,6 +1133,23 @@ class _PostSpacePageState extends State<PostSpacePage> {
                           (v == null || double.tryParse(v) == null)
                               ? 'Enter price'
                               : null,
+                ),
+                const SizedBox(height: 8),
+                // NEW: contact phone field
+                TextFormField(
+                  controller: _phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Contact phone (owner)',
+                    hintText: 'e.g. 9876543210',
+                  ),
+                  keyboardType: TextInputType.phone,
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty)
+                      return 'Enter contact phone';
+                    final digits = v.replaceAll(RegExp(r'\D'), '');
+                    if (digits.length < 10) return 'Enter a valid phone number';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<CoverType>(
