@@ -1135,7 +1135,7 @@ class _PostSpacePageState extends State<PostSpacePage> {
                               : null,
                 ),
                 const SizedBox(height: 8),
-                // NEW: contact phone field
+                // NEW: contact phone field (mandatory)
                 TextFormField(
                   controller: _phone,
                   decoration: const InputDecoration(
@@ -1221,10 +1221,41 @@ class _PostSpacePageState extends State<PostSpacePage> {
                         ? 'Not set'
                         : 'Lat: ${_useLocation!.latitude.toStringAsFixed(5)}, Lng: ${_useLocation!.longitude.toStringAsFixed(5)}',
                   ),
-                  trailing: OutlinedButton.icon(
-                    onPressed: _getCurrent,
-                    icon: const Icon(Icons.my_location, color: Colors.black),
-                    label: const Text('Use Current'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _getCurrent,
+                        icon: const Icon(
+                          Icons.my_location,
+                          color: Colors.black,
+                        ),
+                        label: const Text('Use Current'),
+                      ),
+                      const SizedBox(width: 8),
+                      // NEW: Select on Map button
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          // open map picker; pass current or fallback center
+                          LatLng center =
+                              _useLocation ??
+                              (await _getFallbackCenter()) ??
+                              const LatLng(12.9716, 77.5946);
+                          final picked = await Navigator.of(
+                            context,
+                          ).push<LatLng?>(
+                            MaterialPageRoute(
+                              builder: (_) => MapPickerPage(initial: center),
+                            ),
+                          );
+                          if (picked != null) {
+                            setState(() => _useLocation = picked);
+                          }
+                        },
+                        icon: const Icon(Icons.map, color: Colors.black),
+                        label: const Text('Select on Map'),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1250,8 +1281,128 @@ class _PostSpacePageState extends State<PostSpacePage> {
       ),
     );
   }
+
+  // helper to get a fallback center by trying device location; returns null on failure
+  Future<LatLng?> _getFallbackCenter() async {
+    try {
+      final p = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+      );
+      return LatLng(p.latitude, p.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
+// --------------------------- Map Picker Page ---------------------------
+
+class MapPickerPage extends StatefulWidget {
+  final LatLng initial;
+  const MapPickerPage({required this.initial, super.key});
+  @override
+  State<MapPickerPage> createState() => _MapPickerPageState();
+}
+
+class _MapPickerPageState extends State<MapPickerPage> {
+  late final MapController _mapCtrl;
+  late LatLng _picked; // center pin position
+
+  @override
+  void initState() {
+    super.initState();
+    _mapCtrl = MapController();
+    _picked = widget.initial;
+  }
+
+  // Helper to return the picked location and close page
+  void _confirmAndPop() {
+    Navigator.of(context).pop(_picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Select location'),
+        actions: [
+          // Confirm button restored
+          TextButton(
+            onPressed: _confirmAndPop,
+            child: const Text('Confirm', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapCtrl,
+            options: MapOptions(
+              initialCenter: _picked,
+              initialZoom: 16,
+              // Keep _picked equal to the current map center so the center pin is selection
+              onPositionChanged: (mapPosition, _) {
+                final center = mapPosition.center;
+                if (center != null) {
+                  // Only update state if changed to avoid excessive rebuilds
+                  if (center.latitude != _picked.latitude ||
+                      center.longitude != _picked.longitude) {
+                    setState(() => _picked = center);
+                  }
+                }
+              },
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.example.p2p_parking',
+              ),
+            ],
+          ),
+
+          // Fixed center pin overlay (ignore pointer so map gestures work)
+          const IgnorePointer(
+            ignoring: true,
+            child: Center(
+              child: Icon(Icons.location_on, size: 48, color: Colors.redAccent),
+            ),
+          ),
+
+          // small card at top showing coordinates (optional helpful feedback)
+          Positioned(
+            top: 12,
+            left: 12,
+            right: 12,
+            child: Card(
+              elevation: 4,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: Text(
+                  'Lat: ${_picked.latitude.toStringAsFixed(6)}, Lng: ${_picked.longitude.toStringAsFixed(6)}',
+                  style: const TextStyle(fontSize: 13),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _confirmAndPop, // returns current _picked
+        label: const Text('Use this location'),
+        icon: const Icon(Icons.check),
+      ),
+    );
+  }
+}
 // ------------------------------ Profile Page ------------------------------
 
 class ProfilePage extends StatefulWidget {
