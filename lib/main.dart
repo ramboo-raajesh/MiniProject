@@ -1,15 +1,11 @@
-// main.dart — P2P Parking with Supabase backend + Google Maps navigation
-// ---------------------------------------------------------------------
-// What’s included (single file demo):
-// - Free login with Supabase (email + password) and session persistence
-// - Spaces stored in Supabase (post, list nearby, view details)
-// - Book a space (simple immediate-confirm flow)
-// - One-tap navigation using Google Maps (via URL scheme) to the booked spot
-// - Map UI uses OpenStreetMap tiles via flutter_map (no API key needed)
-//
+// lib/main.dart
+// P2P Parking with Supabase backend + Google Maps navigation
+// Enhanced profile: editable full name, date of birth, profile photo upload.
+
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +15,9 @@ import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+// NEW: image picker for profile photo
+import 'package:image_picker/image_picker.dart';
 
 const SUPABASE_URL = 'https://xoiogluvrwtcdoirqvhu.supabase.co';
 const SUPABASE_ANON =
@@ -83,6 +82,8 @@ class ParkingApp extends StatelessWidget {
         '/home': (_) => const HomePage(),
         '/profile': (_) => const ProfilePage(),
         '/post': (_) => const PostSpacePage(),
+        // NEW route for edit profile
+        '/profile_edit': (_) => const EditProfilePage(),
       },
     );
   }
@@ -104,6 +105,7 @@ class ParkingSpace {
   CoverType coverType;
   List<String> allowedTypes; // '2w','3w','4w'
   String contactPhone; // poster's phone number
+  bool isBooked; // optional denormalized flag
 
   ParkingSpace({
     required this.id,
@@ -117,6 +119,7 @@ class ParkingSpace {
     required this.coverType,
     required this.allowedTypes,
     required this.contactPhone,
+    this.isBooked = false,
   });
 
   factory ParkingSpace.fromMap(Map<String, dynamic> m) => ParkingSpace(
@@ -137,6 +140,7 @@ class ParkingSpace {
             : CoverType.open,
     allowedTypes: List<String>.from(m['allowed_types'] ?? ['2w', '3w', '4w']),
     contactPhone: (m['contact_phone'] ?? '') as String,
+    isBooked: (m['is_booked'] ?? false) as bool,
   );
 
   Map<String, dynamic> toInsert() => {
@@ -151,6 +155,7 @@ class ParkingSpace {
     'cover_type': coverType == CoverType.covered ? 'covered' : 'open',
     'allowed_types': allowedTypes,
     'contact_phone': contactPhone,
+    'is_booked': isBooked,
   };
 }
 
@@ -271,6 +276,63 @@ class Db {
             .select()
             .single();
     return Booking.fromMap(row);
+  }
+
+  // ---------------- Profile helpers ----------------
+
+  /// Fetch profile record for current user (includes full_name, dob, avatar_url)
+  static Future<Map<String, dynamic>?> fetchProfile(String userId) async {
+    final rows =
+        await c.from('profiles').select().eq('id', userId).maybeSingle();
+    if (rows == null) return null;
+    return rows as Map<String, dynamic>;
+  }
+
+  /// Update profile fields (partial update)
+  static Future<void> updateProfile(
+    String userId,
+    Map<String, dynamic> values,
+  ) async {
+    await c.from('profiles').update(values).eq('id', userId);
+  }
+
+  /// Upload avatar bytes to storage bucket 'avatars' and return public URL
+  /// Upload avatar bytes to storage bucket 'avatars' and return public URL
+  static Future<String?> uploadAvatar(String userId, Uint8List bytes) async {
+    try {
+      final key =
+          'avatars/${userId}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      // Upload image bytes to Supabase storage
+      await c.storage.from('avatars').uploadBinary(key, bytes);
+
+      // Get public URL — handle multiple SDK return types
+      final dynamic publicUrlResp = c.storage.from('avatars').getPublicUrl(key);
+
+      // Case 1: plain String (newer SDKs)
+      if (publicUrlResp is String) return publicUrlResp;
+
+      // Case 2: SupabaseFileObject or similar map
+      if (publicUrlResp is Map<String, dynamic>) {
+        final url = publicUrlResp['publicUrl'] ?? publicUrlResp['data'];
+        if (url is String) return url;
+      }
+
+      // Case 3: dynamic object with fields like `.data` or `.publicUrl`
+      try {
+        final dyn = publicUrlResp as dynamic;
+        if (dyn.publicUrl is String) return dyn.publicUrl as String;
+        if (dyn.data is String) return dyn.data as String;
+      } catch (_) {
+        // ignore if no matching field
+      }
+
+      debugPrint('Unexpected getPublicUrl response: $publicUrlResp');
+      return null;
+    } catch (e) {
+      debugPrint('Avatar upload failed: $e');
+      return null;
+    }
   }
 }
 
@@ -432,6 +494,7 @@ class _LoginPageState extends State<LoginPage> {
 }
 
 // -------------------------------- Home Page --------------------------------
+// (unchanged from previous working file; omitted comments for brevity)
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -795,6 +858,25 @@ class _SpaceSheetState extends State<_SpaceSheet> {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
+              if (s.isBooked)
+                Container(
+                  margin: const EdgeInsets.only(left: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Booked',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               Text(
                 '${rs.format(s.pricePerHour)}/hr',
                 style: Theme.of(context).textTheme.titleMedium,
@@ -1233,10 +1315,9 @@ class _PostSpacePageState extends State<PostSpacePage> {
                         label: const Text('Use Current'),
                       ),
                       const SizedBox(width: 8),
-                      // NEW: Select on Map button
+                      // Select on Map button kept from previous enhancement
                       OutlinedButton.icon(
                         onPressed: () async {
-                          // open map picker; pass current or fallback center
                           LatLng center =
                               _useLocation ??
                               (await _getFallbackCenter()) ??
@@ -1326,6 +1407,7 @@ class _MapPickerPageState extends State<MapPickerPage> {
       appBar: AppBar(
         title: const Text('Select location'),
         actions: [
+          // Confirm button restored
           TextButton(
             onPressed: _confirmAndPop,
             child: const Text('Confirm', style: TextStyle(color: Colors.black)),
@@ -1343,7 +1425,6 @@ class _MapPickerPageState extends State<MapPickerPage> {
               onPositionChanged: (mapPosition, hasGesture) {
                 final center = mapPosition.center;
                 if (center != null && hasGesture == true) {
-                  // only update on user gesture to prevent background/programmatic moves
                   if (center.latitude != _picked.latitude ||
                       center.longitude != _picked.longitude) {
                     setState(() => _picked = center);
@@ -1395,7 +1476,7 @@ class _MapPickerPageState extends State<MapPickerPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _confirmAndPop,
+        onPressed: _confirmAndPop, // returns current _picked
         label: const Text('Use this location'),
         icon: const Icon(Icons.check),
       ),
@@ -1403,7 +1484,7 @@ class _MapPickerPageState extends State<MapPickerPage> {
   }
 }
 
-// ------------------------------ Profile Page ------------------------------
+// ------------------------------ Profile Page (ENHANCED) ------------------------------
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -1413,11 +1494,18 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   List<ParkingSpace> _mine = [];
+  Map<String, dynamic>? _profile;
+  bool _loadingProfile = true;
 
   Future<void> _load() async {
     final uid = Supabase.instance.client.auth.currentUser!.id;
     final list = await Db.spacesByOwner(uid);
-    setState(() => _mine = list);
+    final profile = await Db.fetchProfile(uid);
+    setState(() {
+      _mine = list;
+      _profile = profile;
+      _loadingProfile = false;
+    });
   }
 
   @override
@@ -1426,68 +1514,346 @@ class _ProfilePageState extends State<ProfilePage> {
     _load();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final u = Supabase.instance.client.auth.currentUser!;
-    return Scaffold(
-      appBar: AppBar(title: const Text('My Profile')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 32,
-                  child: Text(
-                    _initials(u.email ?? 'U'),
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        u.email ?? 'Unknown',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const Text('Authenticated via Supabase'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Your Posted Spaces',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            if (_mine.isEmpty)
-              const Text("You haven't posted any spaces yet.")
-            else
-              ..._mine.map(
-                (s) => _SpaceListTile(
-                  space: s,
-                  onDeleted: () async {
-                    await _load();
-                  },
-                  onEdited: () async {
-                    await _load();
-                  },
-                ),
-              ),
-          ],
-        ),
+  Widget _avatarWidget(String? url, String initials) {
+    if (url != null && url.isNotEmpty) {
+      return CircleAvatar(radius: 32, backgroundImage: NetworkImage(url));
+    }
+    return CircleAvatar(
+      radius: 32,
+      child: Text(
+        initials,
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
       ),
     );
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = Supabase.instance.client.auth.currentUser!;
+    final initials = _initials(
+      _profile?['full_name'] as String? ?? u.email ?? 'U',
+    );
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('My Profile')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          // open edit profile screen and refresh on return
+          await Navigator.of(context).pushNamed('/profile_edit');
+          await _load();
+        },
+        child: const Icon(Icons.edit),
+      ),
+      body: SafeArea(
+        child:
+            _loadingProfile
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    Row(
+                      children: [
+                        _avatarWidget(
+                          _profile?['avatar_url'] as String?,
+                          initials,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _profile?['full_name'] as String? ??
+                                    (u.email ?? 'Unknown'),
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(u.email ?? 'No email'),
+                              const SizedBox(height: 6),
+                              Text(
+                                _profile?['dob'] != null &&
+                                        (_profile!['dob'] as String).isNotEmpty
+                                    ? 'DOB: ${_formatDob(_profile!['dob'] as String)}'
+                                    : 'DOB: Not set',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Your Posted Spaces',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    if (_mine.isEmpty)
+                      const Text("You haven't posted any spaces yet.")
+                    else
+                      ..._mine.map(
+                        (s) => _SpaceListTile(
+                          space: s,
+                          onDeleted: () async {
+                            await _load();
+                          },
+                          onEdited: () async {
+                            await _load();
+                          },
+                        ),
+                      ),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: () async {
+                        // quick refresh manually
+                        await _load();
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Profile refreshed')),
+                          );
+                        }
+                      },
+                      child: const Text('Refresh Profile'),
+                    ),
+                  ],
+                ),
+      ),
+    );
+  }
+
+  String _formatDob(String iso) {
+    try {
+      final d = DateTime.parse(iso);
+      return DateFormat.yMMMd().format(d);
+    } catch (_) {
+      return iso;
+    }
+  }
 }
+
+// ------------------------------ Edit Profile Page ------------------------------
+
+class EditProfilePage extends StatefulWidget {
+  const EditProfilePage({super.key});
+  @override
+  State<EditProfilePage> createState() => _EditProfilePageState();
+}
+
+class _EditProfilePageState extends State<EditProfilePage> {
+  final _formKey = GlobalKey<FormState>();
+  final _fullName = TextEditingController();
+  DateTime? _dob;
+  String? _avatarUrl;
+  bool _saving = false;
+  bool _loading = true;
+  final ImagePicker _picker = ImagePicker();
+  Uint8List? _pickedBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    final uid = Supabase.instance.client.auth.currentUser!.id;
+    final p = await Db.fetchProfile(uid);
+    if (p != null) {
+      _fullName.text = (p['full_name'] as String?) ?? '';
+      final dobVal = p['dob'] as String?;
+      if (dobVal != null && dobVal.isNotEmpty) {
+        try {
+          _dob = DateTime.parse(dobVal);
+        } catch (_) {
+          _dob = null;
+        }
+      }
+      _avatarUrl = p['avatar_url'] as String?;
+    }
+    setState(() => _loading = false);
+  }
+
+  Future<void> _pickImage(ImageSource src) async {
+    try {
+      final XFile? file = await _picker.pickImage(
+        source: src,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 80,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      setState(() {
+        _pickedBytes = bytes;
+        // show preview from memory, avatarUrl kept until upload
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Image pick failed: $e')));
+    }
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    final uid = Supabase.instance.client.auth.currentUser!.id;
+
+    try {
+      String? uploadedUrl = _avatarUrl;
+      if (_pickedBytes != null) {
+        final res = await Db.uploadAvatar(uid, _pickedBytes!);
+        if (res != null) uploadedUrl = res;
+      }
+
+      final updateMap = <String, dynamic>{
+        'full_name': _fullName.text.trim(),
+        'avatar_url': uploadedUrl,
+      };
+      if (_dob != null) updateMap['dob'] = _dob!.toIso8601String();
+
+      await Db.updateProfile(uid, updateMap);
+
+      if (!mounted) return;
+      Navigator.of(context).pop(); // return to profile page
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile updated')));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Save failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Widget _avatarPreview() {
+    if (_pickedBytes != null) {
+      return CircleAvatar(
+        radius: 48,
+        backgroundImage: MemoryImage(_pickedBytes!),
+      );
+    }
+    if (_avatarUrl != null && _avatarUrl!.isNotEmpty) {
+      return CircleAvatar(
+        radius: 48,
+        backgroundImage: NetworkImage(_avatarUrl!),
+      );
+    }
+    final initials = _initials(
+      _fullName.text.isNotEmpty
+          ? _fullName.text
+          : (Supabase.instance.client.auth.currentUser!.email ?? 'U'),
+    );
+    return CircleAvatar(
+      radius: 48,
+      child: Text(initials, style: const TextStyle(fontSize: 24)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Edit Profile'),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _save,
+            child: const Text('Save', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+      body:
+          _loading
+              ? const Center(child: CircularProgressIndicator())
+              : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Form(
+                    key: _formKey,
+                    child: ListView(
+                      children: [
+                        Center(child: _avatarPreview()),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _pickImage(ImageSource.gallery),
+                              icon: const Icon(Icons.photo_library),
+                              label: const Text('Gallery'),
+                            ),
+                            const SizedBox(width: 8),
+                            TextButton.icon(
+                              onPressed: () => _pickImage(ImageSource.camera),
+                              icon: const Icon(Icons.camera_alt),
+                              label: const Text('Camera'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _fullName,
+                          decoration: const InputDecoration(
+                            labelText: 'Full name',
+                          ),
+                          validator:
+                              (v) =>
+                                  (v == null || v.trim().isEmpty)
+                                      ? 'Enter your name'
+                                      : null,
+                        ),
+                        const SizedBox(height: 12),
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Date of Birth'),
+                          subtitle: Text(
+                            _dob == null
+                                ? 'Not set'
+                                : DateFormat.yMMM().add_d().format(_dob!),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.calendar_today),
+                            onPressed: () async {
+                              final now = DateTime.now();
+                              final initial =
+                                  _dob ??
+                                  DateTime(now.year - 25, now.month, now.day);
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: initial,
+                                firstDate: DateTime(1900),
+                                lastDate: DateTime(
+                                  now.year,
+                                  now.month,
+                                  now.day,
+                                ),
+                              );
+                              if (picked != null) setState(() => _dob = picked);
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        FilledButton(
+                          onPressed: _saving ? null : _save,
+                          child:
+                              _saving
+                                  ? const CircularProgressIndicator()
+                                  : const Text('Save Profile'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+    );
+  }
+}
+
+// ------------------------------ Profile helper widgets reused ------------------------------
 
 class _SpaceListTile extends StatelessWidget {
   final ParkingSpace space;
