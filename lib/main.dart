@@ -7,12 +7,13 @@ import 'dart:math' as math;
 import 'dart:io' show Platform;
 import 'dart:typed_data';
 
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
@@ -40,7 +41,7 @@ class ParkingApp extends StatelessWidget {
     );
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'P2P Parking',
+      title: 'Park Here',
       theme: ThemeData(
         colorScheme: colorScheme,
         useMaterial3: true,
@@ -161,7 +162,9 @@ class Booking {
   final String spaceId;
   final String bookerUserId;
   final String vehicleType; // '2w'|'3w'|'4w'
-  final String status; // confirmed, etc.
+  final String status; // pending, confirmed, parked, completed
+  final DateTime? parkStartTime;
+  final DateTime? parkEndTime;
 
   Booking({
     required this.id,
@@ -169,6 +172,8 @@ class Booking {
     required this.bookerUserId,
     required this.vehicleType,
     required this.status,
+    this.parkStartTime,
+    this.parkEndTime,
   });
 
   factory Booking.fromMap(Map<String, dynamic> m) => Booking(
@@ -177,8 +182,146 @@ class Booking {
     bookerUserId: m['booker_user_id'] as String,
     vehicleType: m['vehicle_type'] as String,
     status: m['status'] as String,
+    parkStartTime: m['park_start_time'] != null ? DateTime.tryParse(m['park_start_time']) : null,
+    parkEndTime: m['park_end_time'] != null ? DateTime.tryParse(m['park_end_time']) : null,
   );
 }
+
+class ParkingPinPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Stem
+    final stemPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    
+    final h = size.height;
+    final w = size.width;
+    final triH = h * 0.65;
+    
+    canvas.drawLine(
+      Offset(w / 2, triH),
+      Offset(w / 2, h),
+      stemPaint,
+    );
+
+    // Triangle Board
+    final paint = Paint()
+      ..color = const Color(0xFFFFEF00) // Yellow
+      ..style = PaintingStyle.fill;
+    
+    final border = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+
+    final path = Path();
+    // Upright triangle
+    path.moveTo(w / 2, 0);
+    path.lineTo(w, triH);
+    path.lineTo(0, triH);
+    path.close();
+
+    canvas.drawPath(path, paint);
+    canvas.drawPath(path, border);
+
+    // 'P' Text
+    final textSpan = TextSpan(
+      text: 'P',
+      style: TextStyle(
+        color: Colors.black,
+        fontSize: w * 0.4,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+    final tp = TextPainter(
+      text: textSpan,
+      textDirection: ui.TextDirection.ltr,
+    );
+    tp.layout();
+    tp.paint(canvas, Offset((w - tp.width) / 2, (triH - tp.height) / 2 + 2)); 
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// --------------------------- Slide Action Widget ---------------------------
+
+class SlideAction extends StatefulWidget {
+  final VoidCallback onSubmit;
+  final String label;
+  const SlideAction({required this.onSubmit, required this.label, super.key});
+
+  @override
+  State<SlideAction> createState() => _SlideActionState();
+}
+
+class _SlideActionState extends State<SlideAction> {
+  double _dragVal = 0.0;
+  final double _maxWidth = 200.0; // draggable area width
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 60,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade300,
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Stack(
+        children: [
+          Center(
+            child: Text(
+              widget.label,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: Colors.black54,
+              ),
+            ),
+          ),
+          Positioned(
+            left: _dragVal,
+            top: 0,
+            bottom: 0,
+            child: GestureDetector(
+              onHorizontalDragUpdate: (details) {
+                final w = MediaQuery.of(context).size.width - 48; // padding
+                final maxDrag = w - 60;
+                setState(() {
+                  _dragVal = (_dragVal + details.delta.dx).clamp(0.0, maxDrag);
+                });
+              },
+              onHorizontalDragEnd: (details) {
+                 final w = MediaQuery.of(context).size.width - 48;
+                 final maxDrag = w - 60;
+                 if (_dragVal > maxDrag * 0.8) {
+                    widget.onSubmit();
+                    // Reset
+                    setState(() => _dragVal = 0);
+                 } else {
+                    setState(() => _dragVal = 0);
+                 }
+              },
+              child: Container(
+                width: 60,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFFEF00),
+                  shape: BoxShape.circle,
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                ),
+                child: const Icon(Icons.chevron_right, size: 32),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 String _initials(String name) {
   final parts = name.trim().split(RegExp(r"\s+"));
@@ -264,11 +407,65 @@ class Db {
               'space_id': spaceId,
               'booker_user_id': uid,
               'vehicle_type': vehicleType,
-              'status': 'confirmed',
+              'status': 'pending',
             })
             .select()
             .single();
     return Booking.fromMap(row);
+  }
+
+  static Future<void> updateBookingStatus(String bookingId, String status) async {
+    await c.from('bookings').update({'status': status}).eq('id', bookingId);
+  }
+  
+  static Future<void> startParking(String bookingId) async {
+    await c.from('bookings').update({
+      'status': 'parked',
+      'park_start_time': DateTime.now().toIso8601String(),
+    }).eq('id', bookingId);
+  }
+
+  static Stream<Booking> listenToBooking(String bookingId) {
+    return c
+        .from('bookings')
+        .stream(primaryKey: ['id'])
+        .eq('id', bookingId)
+        .map((rows) => Booking.fromMap(rows.first));
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchIncomingRequests(String ownerId) async {
+    // 1. Get my space IDs
+    final spaces = await c.from('spaces').select('id, title, price_per_hour').eq('owner_user_id', ownerId);
+    final spaceIds = (spaces as List).map((s) => s['id'] as String).toList();
+    
+    if (spaceIds.isEmpty) return [];
+
+    // 2. Get pending bookings for these spaces
+    final bookings = await c
+        .from('bookings')
+        .select() // Simple select, no join to avoid errors
+        .inFilter('space_id', spaceIds)
+        .eq('status', 'pending');
+    
+    // Manually join space info
+    final spaceMap = {for (var s in spaces) s['id']: s};
+    final requests = <Map<String, dynamic>>[];
+    
+    for (var b in (bookings as List)) {
+      final bookingData = b as Map<String, dynamic>;
+      final space = spaceMap[bookingData['space_id']];
+      // Fetch booker profile name separately
+      final bookerId = bookingData['booker_user_id'];
+      final bookerProfile = await fetchProfile(bookerId); 
+      
+      requests.add({
+        'booking': Booking.fromMap(bookingData),
+        'space_title': space?['title'] ?? 'Unknown Space',
+        'booker_name': bookerProfile?['full_name'] ?? 'User',
+        'booker_phone': bookerProfile?['email'] ?? 'Unknown', // Use email as fallback
+      });
+    }
+    return requests;
   }
 
   // PROFILE helpers
@@ -329,7 +526,7 @@ class LoginPage extends StatefulWidget {
   State<LoginPage> createState() => _LoginPageState();
 }
 
-class _LoginPageState extends State<LoginPage> {
+class _LoginPageState extends State<LoginPage> with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _pwd = TextEditingController();
@@ -342,6 +539,22 @@ class _LoginPageState extends State<LoginPage> {
 
   bool _isLogin = true;
   bool _busy = false;
+  bool _verificationSent = false;
+  bool _isVerifiedAnimating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkSession();
+  }
+
+  Future<void> _checkSession() async {
+    await Future.delayed(Duration.zero);
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session != null && mounted) {
+      Navigator.of(context).pushReplacementNamed('/home');
+    }
+  }
 
   Future<void> _pickRegAvatar(ImageSource src) async {
     try {
@@ -365,91 +578,91 @@ class _LoginPageState extends State<LoginPage> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _busy = true);
 
-    try {
-      if (_isLogin) {
-        // login
-        await Supabase.instance.client.auth.signInWithPassword(
-          email: _email.text.trim(),
-          password: _pwd.text.trim(),
-        );
-        if (!mounted) return;
-        Navigator.of(context).pushReplacementNamed('/home');
-      } else {
-        // register flow
-        final email = _email.text.trim();
-        final pwd = _pwd.text.trim();
-        // Attempt sign up
-        try {
-          await Supabase.instance.client.auth.signUp(
-            email: email,
-            password: pwd,
-            data: {
+      try {
+        if (_isLogin) {
+          // login
+          try {
+            await Supabase.instance.client.auth.signInWithPassword(
+              email: _email.text.trim(),
+              password: _pwd.text.trim(),
+            );
+            if (!mounted) return;
+            Navigator.of(context).pushReplacementNamed('/home');
+          } on AuthException catch (e) {
+             // ----------------- CHANGED -----------------
+             String msg = e.message;
+             if (msg.contains('Invalid login credentials') || msg.contains('not found')) {
+                msg = 'No account found';
+             }
+             if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+             }
+             setState(() => _busy = false);
+             // -------------------------------------------
+          }
+        } else {
+          // register flow
+          final email = _email.text.trim();
+          final pwd = _pwd.text.trim();
+          
+          try {
+            final res = await Supabase.instance.client.auth.signUp(
+              email: email,
+              password: pwd,
+              emailRedirectTo: 'io.supabase.flutter://login-callback/',
+              data: {
+                'full_name': _regName.text.trim(),
+                'dob': _regDob != null ? _regDob!.toIso8601String() : null,
+              },
+            );
+            
+            // If session is null, email confirmation is required (security setting)
+            if (res.session == null) {
+               if (mounted) setState(() {
+                  _verificationSent = true;
+                  _busy = false;
+               });
+               return;
+            }
+
+            // If we got a session immediately (email confirm disabled), proceed
+            // upload avatar (if any) and upsert profile row
+            final uid = res.user!.id; // known valid if session exists
+            String? avatarUrl;
+            if (_regAvatarBytes != null) {
+              avatarUrl = await Db.uploadAvatar(uid, _regAvatarBytes!);
+            }
+            final updateMap = <String, dynamic>{
+              'id': uid,
+              'email': email,
               'full_name': _regName.text.trim(),
-              'dob': _regDob != null ? _regDob!.toIso8601String() : null,
-            },
-          );
-        } on AuthException catch (e) {
-          // If signUp explicitly failed, show message
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text(e.message)));
-          setState(() => _busy = false);
-          return;
-        }
+            };
+            if (_regDob != null) updateMap['dob'] = _regDob!.toIso8601String();
+            if (avatarUrl != null) updateMap['avatar_url'] = avatarUrl;
 
-        // Try to sign in immediately. If email verification is required, signIn may throw.
-        try {
-          await Supabase.instance.client.auth.signInWithPassword(
-            email: email,
-            password: pwd,
-          );
+            await Supabase.instance.client.from('profiles').upsert(updateMap);
 
-          // now we have a session: upload avatar (if any) and upsert profile row
-          final uid = Supabase.instance.client.auth.currentUser!.id;
-          String? avatarUrl;
-          if (_regAvatarBytes != null) {
-            avatarUrl = await Db.uploadAvatar(uid, _regAvatarBytes!);
-          }
-          final updateMap = <String, dynamic>{
-            'id': uid,
-            'email': email,
-            'full_name': _regName.text.trim(),
-          };
-          if (_regDob != null) updateMap['dob'] = _regDob!.toIso8601String();
-          if (avatarUrl != null) updateMap['avatar_url'] = avatarUrl;
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account created')));
+            Navigator.of(context).pushReplacementNamed('/home');
 
-          await Supabase.instance.client.from('profiles').upsert(updateMap);
-
-          if (!mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Account created')));
-          Navigator.of(context).pushReplacementNamed('/home');
-        } on AuthException catch (e) {
-          // If signIn fails due to email verification, show friendly message
-          final msg =
-              (e.message.toLowerCase().contains('confirm') ||
-                      e.message.toLowerCase().contains('verify'))
-                  ? 'Verification Mail Sent'
-                  : e.message;
-          if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text(msg)));
-            // return to login view (so user can sign in after verifying)
-            setState(() => _isLogin = true);
+          } on AuthException catch (e) {
+            final msg = e.message;
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+            }
+            setState(() => _busy = false);
           }
         }
+      } catch (e) {
+        if (mounted)
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      } finally {
+        if (mounted) setState(() => _busy = false);
       }
-    } catch (e) {
-      if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Auth error: $e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -469,7 +682,7 @@ class _LoginPageState extends State<LoginPage> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'P2P Parking',
+                    'Park Here',
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 16),
@@ -612,6 +825,120 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ),
                   ),
+                  if (_verificationSent)
+                    Container(
+                      margin: const EdgeInsets.only(top: 24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black12,
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 500),
+                            child: _isVerifiedAnimating
+                                ? const Icon(Icons.check_circle, color: Colors.green, size: 64, key: ValueKey('verified'))
+                                : const Icon(Icons.mark_email_unread, size: 64, color: Colors.orange, key: ValueKey('verify')),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                              'Verification email sent!\nPlease check your inbox/spam folder.',
+                              textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 16),
+                          if (!_isVerifiedAnimating)
+                            ElevatedButton(
+                              onPressed: () async {
+                                 // Check if verified
+                                 setState(() => _isVerifiedAnimating = true);
+                                 // Artificial delay for animation or check
+                                 await Future.delayed(const Duration(milliseconds: 800));
+                                 
+                                 // Refresh session
+                                 try {
+                                   final res = await Supabase.instance.client.auth.refreshSession();
+                                   if (res.session != null || Supabase.instance.client.auth.currentUser?.emailConfirmedAt != null) {
+                                      // Success
+                                      if (mounted) { 
+                                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Email Verified!')));
+                                         Navigator.of(context).pushReplacementNamed('/home');
+                                      }
+                                   } else {
+                                      // Not verified yet
+                                      if (mounted) {
+                                         setState(() => _isVerifiedAnimating = false);
+                                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Not verified yet. Please click the link in your email.')));
+                                      }
+                                   }
+                                 } catch (e) {
+                                    if (mounted) setState(() => _isVerifiedAnimating = false);
+                                 }
+                              },
+                              child: const Text('I have Verified'),
+                            ),
+                          const SizedBox(height: 16),
+                          Text(
+                            _isVerifiedAnimating ? 'Verified!' : 'Please Verify Email',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 8),
+                          if (!_isVerifiedAnimating)
+                            const Text(
+                              'Click the link we sent to your email, then click the button below.',
+                              textAlign: TextAlign.center,
+                            ),
+                          const SizedBox(height: 24),
+                          if (!_isVerifiedAnimating)
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                  onPressed: _busy ? null : () async {
+                                    setState(() => _busy = true);
+                                    try {
+                                        // Attempt login to check verification status
+                                        await Supabase.instance.client.auth.signInWithPassword(
+                                          email: _email.text.trim(),
+                                          password: _pwd.text.trim(),
+                                        );
+                                        // If we get here, we are verified/logged in
+                                        setState(() => _isVerifiedAnimating = true);
+                                        await Future.delayed(const Duration(seconds: 2));
+                                        if (mounted) Navigator.of(context).pushReplacementNamed('/home');
+                                    } catch(e) {
+                                       if (mounted) {
+                                         ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text('Not yet verified or wrong credentials.'))
+                                         );
+                                       }
+                                    } finally {
+                                      if(mounted) setState(() => _busy = false);
+                                    }
+                                  },
+                                  icon: _busy ? const SizedBox.shrink() : const Icon(Icons.touch_app),
+                                  label: _busy 
+                                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                    : const Text('I have Verified'),
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          if (!_isVerifiedAnimating)
+                            TextButton(
+                              onPressed: () => setState(() => _verificationSent = false),
+                              child: const Text('Back to Login'),
+                            ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -637,11 +964,28 @@ class _HomePageState extends State<HomePage> {
   bool _showNearby = false;
   List<ParkingSpace> _nearby = [];
   String _vehicleType = '2w';
+  Booking? _activeBooking;
 
   @override
   void initState() {
     super.initState();
     _initLocation();
+    _checkActiveBooking();
+  }
+
+  Future<void> _checkActiveBooking() async {
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+        final rows = await Db.c.from('bookings')
+          .select()
+          .eq('booker_user_id', uid)
+          .eq('status', 'confirmed') // only confirmed need sliding
+          .maybeSingle();
+        if (rows != null) {
+            setState(() => _activeBooking = Booking.fromMap(rows));
+        }
+    } catch (_) {}
   }
 
   Future<void> _initLocation() async {
@@ -659,10 +1003,13 @@ class _HomePageState extends State<HomePage> {
         );
         _current = LatLng(pos.latitude, pos.longitude);
       }
-      await _fetchNearby();
-    } catch (_) {
+      // NOTE: Do NOT fetch nearby automatically. Wait for "Park" button.
+      // await _fetchNearby(); 
+      // await _fetchNearby(); // Restore automatic fetch
+    } catch (e) {
       _current = const LatLng(12.9716, 77.5946);
-      await _fetchNearby();
+      debugPrint('Loc error: $e');
+      // await _fetchNearby(); // Restore automatic fetch
     }
     if (!mounted) return;
     setState(() => _locating = false);
@@ -670,12 +1017,23 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _fetchNearby() async {
     if (_current == null) return;
-    final list = await Db.nearby(_current!, maxKm: 3);
-    setState(() => _nearby = list);
+    try {
+      final list = await Db.nearby(_current!);
+      if (mounted) setState(() => _nearby = list);
+    } catch (e) {
+      debugPrint('Error fetching nearby: $e');
+    }
   }
+
+  bool _markersShown = false; // "Park" button state
 
   @override
   Widget build(BuildContext context) {
+    // Legacy Flow:
+    // 1. Show Map (no markers)
+    // 2. Show "Park" button
+    // 3. Click "Park" -> Show markers
+
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) {
       Future.microtask(
@@ -783,18 +1141,27 @@ class _HomePageState extends State<HomePage> {
                               Row(
                                 children: [
                                   Expanded(
-                                    child: FilledButton.icon(
-                                      onPressed: () async {
-                                        setState(() => _showNearby = true);
-                                        _mapController.move(_current!, 16);
-                                        await _fetchNearby();
-                                      },
-                                      icon: const Icon(
-                                        Icons.directions_car,
-                                        color: Colors.black,
-                                      ),
-                                      label: const Text('Park'),
-                                    ),
+                                    child: _activeBooking != null
+                                        ? SlideAction(
+                                            label: 'Slide to Park Here',
+                                            onSubmit: () async {
+                                              await Db.startParking(_activeBooking!.id);
+                                              setState(() => _activeBooking = null);
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                const SnackBar(content: Text('Parking Timer Started!')),
+                                              );
+                                              // Navigate to profile to see timer?
+                                              Navigator.of(context).pushNamed('/profile');
+                                            },
+                                          )
+                                        : FilledButton.icon(
+                                            label: const Text('Park'),
+                                            onPressed: () {
+                                              setState(() => _markersShown = true);
+                                              _fetchNearby();
+                                              _mapController.move(_current!, 16);
+                                            },
+                                          ),
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
@@ -822,34 +1189,35 @@ class _HomePageState extends State<HomePage> {
                                 ],
                               ),
                               const SizedBox(height: 12),
-                              if (_showNearby)
+                              const SizedBox(height: 12),
+                              if (_markersShown)
                                 Row(
-                                  children: [
-                                    const Text('Vehicle:'),
-                                    const SizedBox(width: 8),
-                                    DropdownButton<String>(
-                                      value: _vehicleType,
-                                      items: const [
-                                        DropdownMenuItem(
-                                          value: '2w',
-                                          child: Text('2-wheeler'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: '3w',
-                                          child: Text('3-wheeler'),
-                                        ),
-                                        DropdownMenuItem(
-                                          value: '4w',
-                                          child: Text('4-wheeler'),
-                                        ),
-                                      ],
-                                      onChanged:
-                                          (v) => setState(
-                                            () => _vehicleType = v ?? '2w',
+                                    children: [
+                                      const Text('Vehicle:'),
+                                      const SizedBox(width: 8),
+                                      DropdownButton<String>(
+                                        value: _vehicleType,
+                                        items: const [
+                                          DropdownMenuItem(
+                                            value: '2w',
+                                            child: Text('2-wheeler'),
                                           ),
-                                    ),
-                                  ],
-                                ),
+                                          DropdownMenuItem(
+                                            value: '3w',
+                                            child: Text('3-wheeler'),
+                                          ),
+                                          DropdownMenuItem(
+                                            value: '4w',
+                                            child: Text('4-wheeler'),
+                                          ),
+                                        ],
+                                        onChanged:
+                                            (v) => setState(
+                                              () => _vehicleType = v ?? '2w',
+                                            ),
+                                      ),
+                                    ],
+                                  ),
                             ],
                           ),
                         ),
@@ -868,17 +1236,17 @@ class _HomePageState extends State<HomePage> {
         Marker(
           point: _current!,
           width: 44,
-          height: 44,
+          height: 60,
           alignment: Alignment.center,
-          child: const Icon(
-            Icons.my_location,
-            size: 30,
-            color: Colors.blueAccent,
+          child: Image.asset(
+            'assets/icon/bike_top_view.png',
+            width: 60,
+            height: 60,
           ),
         ),
       );
     }
-    if (_showNearby && _current != null) {
+    if (_markersShown && _current != null) {
       for (final s in _nearby.where(
         (s) => s.allowedTypes.contains(_vehicleType),
       )) {
@@ -887,12 +1255,57 @@ class _HomePageState extends State<HomePage> {
             point: s.location,
             width: 120,
             height: 80,
-            child: _PriceMarker(space: s, vehicleType: _vehicleType),
+            alignment: Alignment.bottomCenter,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: _BouncingMarker( // ANIMATION ADDED
+                  child: _PriceMarker(space: s, vehicleType: _vehicleType)
+              ),
+            ),
           ),
         );
       }
     }
     return markers;
+  }
+}
+
+class _BouncingMarker extends StatefulWidget {
+  final Widget child;
+  const _BouncingMarker({required this.child});
+  @override
+  State<_BouncingMarker> createState() => _BouncingMarkerState();
+}
+
+class _BouncingMarkerState extends State<_BouncingMarker> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+      super.initState();
+      _controller = AnimationController(vsync: this, duration: const Duration(seconds: 1));
+      _animation = Tween<double>(begin: 0, end: -10).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+      _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+      _controller.dispose();
+      super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+      return AnimatedBuilder(
+          animation: _animation,
+          builder: (context, child) {
+              return Transform.translate(
+                  offset: Offset(0, _animation.value),
+                  child: widget.child,
+              );
+          }
+      );
   }
 }
 
@@ -930,7 +1343,10 @@ class _PriceMarker extends StatelessWidget {
               ),
             ),
           ),
-          const Icon(Icons.location_on, size: 32, color: Colors.redAccent),
+          CustomPaint(
+            size: const Size(44, 44),
+            painter: ParkingPinPainter(),
+          ),
         ],
       ),
     );
@@ -946,7 +1362,27 @@ class _SpaceSheet extends StatefulWidget {
 }
 
 class _SpaceSheetState extends State<_SpaceSheet> {
-  bool _booking = false;
+  bool _submitting = false;
+  bool _navigated = false; // State to track navigation
+  Booking? _booking;
+  StreamSubscription<Booking>? _sub;
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _listen(Booking b) {
+    _sub?.cancel();
+    setState(() => _booking = b);
+    _sub = Db.listenToBooking(b.id).listen((updated) {
+       if (mounted) setState(() => _booking = updated);
+       if (updated.status == 'confirmed') {
+          // Maybe show a toast
+       }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -994,7 +1430,7 @@ class _SpaceSheetState extends State<_SpaceSheet> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: const Text(
-                    'Booked',
+                    'Full',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -1010,76 +1446,123 @@ class _SpaceSheetState extends State<_SpaceSheet> {
           const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: chips),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              const Text('Vehicle:'),
-              const SizedBox(width: 8),
-              DropdownButton<String>(
-                value: widget.vehicleType,
-                items: const [
-                  DropdownMenuItem(value: '2w', child: Text('2-wheeler')),
-                  DropdownMenuItem(value: '3w', child: Text('3-wheeler')),
-                  DropdownMenuItem(value: '4w', child: Text('4-wheeler')),
-                ],
-                onChanged: (_) {}, // just display here
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed:
-                      _booking
-                          ? null
-                          : () async {
-                            setState(() => _booking = true);
-                            try {
-                              final b = await Db.createBooking(
-                                spaceId: s.id,
-                                vehicleType: widget.vehicleType,
-                              );
-                              if (!mounted) return;
-                              Navigator.pop(context);
-                              _showNavSheet(context, s.location);
-                            } catch (e) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Booking failed: $e')),
-                                );
-                              }
-                            } finally {
-                              if (mounted) setState(() => _booking = false);
-                            }
-                          },
-                  icon: const Icon(Icons.check_circle, color: Colors.black),
-                  label: Text(_booking ? 'Booking...' : 'Book & Navigate'),
+          
+          if (_booking == null) ...[
+            // Status: Not booked by me yet
+            Row(
+              children: [
+                const Text('Vehicle:'),
+                const SizedBox(width: 8),
+                DropdownButton<String>(
+                  value: widget.vehicleType,
+                  items: const [
+                    DropdownMenuItem(value: '2w', child: Text('2-wheeler')),
+                    DropdownMenuItem(value: '3w', child: Text('3-wheeler')),
+                    DropdownMenuItem(value: '4w', child: Text('4-wheeler')),
+                  ],
+                  onChanged: (_) {}, // just display here
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    final phone = s.contactPhone.trim();
-                    if (phone.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Owner has not provided a phone number',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    _dialOwner(phone);
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _submitting ? null : () async {
+                      setState(() => _submitting = true);
+                      try {
+                        final b = await Db.createBooking(
+                          spaceId: s.id,
+                          vehicleType: widget.vehicleType,
+                        );
+                        _listen(b);
+                      } catch (e) {
+                         if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
+                      } finally {
+                        if(mounted) setState(() => _submitting = false);
+                      }
+                    },
+                    icon: _submitting 
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) 
+                      : const Icon(Icons.touch_app, color: Colors.black),
+                    label: const Text('Book'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                        final phone = s.contactPhone.trim();
+                        if (phone.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No phone number')));
+                            return;
+                        }
+                        _dialOwner(phone);
+                    },
+                     icon: const Icon(Icons.call, color: Colors.black),
+                    label: const Text('Contact'),
+                  ),
+                ),
+              ],
+            ),
+          ] else if (_booking!.status == 'pending') ...[
+             const Card(
+               color: Colors.orangeAccent,
+               child: Padding(
+                 padding: EdgeInsets.all(12),
+                 child: Text('Waiting for owner confirmation', style: TextStyle(fontWeight: FontWeight.bold)),
+               ),
+             ),
+          ] else if (_booking!.status == 'confirmed') ...[
+             // CONFIRMED: Show Navigate + Park Here
+             const Card(
+               color: Colors.greenAccent,
+               child: Padding(
+                 padding: EdgeInsets.all(12),
+                 child: Text('Booking Confirmed! Navigate to location and slide to start parking.', style: TextStyle(fontWeight: FontWeight.bold)),
+               ),
+             ),
+             const SizedBox(height: 16),
+             Row(
+               children: [
+                 Expanded(
+                   child: ElevatedButton.icon(
+                     onPressed: () {
+                        _openGoogleMaps(s.location);
+                        setState(() => _navigated = true); // Reveal slider
+                     },
+                     icon: const Icon(Icons.navigation),
+                     label: const Text('Navigate'),
+                   ),
+                 ),
+               ],
+             ),
+             if (_navigated) ...[
+                const SizedBox(height: 16),
+                SlideAction(
+                  label: 'Park Here',
+                  onSubmit: () async {
+                    await Db.startParking(_booking!.id);
+                    // Reset nav state just in case
+                    setState(() => _navigated = false);
                   },
-                  icon: const Icon(Icons.call, color: Colors.black),
-                  label: const Text('Contact'),
                 ),
-              ),
-            ],
-          ),
+             ]
+          ] else if (_booking!.status == 'parked') ...[
+             const Card(
+               color: Colors.blueAccent,
+               child: Padding(
+                 padding: EdgeInsets.all(12),
+                 child: Text('PARKING STARTED\nSession is active. Check "My Vehicle" in Profile.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+               ),
+             ),
+          ] else if (_booking!.status == 'rejected') ...[
+             const Padding(
+               padding: EdgeInsets.all(8.0),
+               child: Text('Booking was rejected.', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+             ),
+          ]
         ],
       ),
     );
@@ -1608,15 +2091,63 @@ class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _profile;
   bool _loadingProfile = true;
 
+  List<Booking> _activeBookings = [];
+  List<Map<String, dynamic>> _requests = [];
+  Timer? _timer;
+  Duration _parkDuration = Duration.zero;
+
   Future<void> _load() async {
     final uid = Supabase.instance.client.auth.currentUser!.id;
-    final list = await Db.spacesByOwner(uid);
-    final profile = await Db.fetchProfile(uid);
-    setState(() {
-      _mine = list;
-      _profile = profile;
-      _loadingProfile = false;
-    });
+    try {
+      final list = await Db.spacesByOwner(uid);
+      final profile = await Db.fetchProfile(uid);
+      final requests = await Db.fetchIncomingRequests(uid);
+      
+      // Fetch my active bookings
+      final myBookings = await Db.c.from('bookings')
+          .select()
+          .eq('booker_user_id', uid)
+          .inFilter('status', ['confirmed', 'parked']);
+      
+      final active = (myBookings as List).map((m) => Booking.fromMap(m)).toList();
+
+      if (mounted) {
+        setState(() {
+          _mine = list;
+          _profile = profile;
+          _requests = requests;
+          _activeBookings = active;
+        });
+        _startTimer();
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error loading profile: $e')));
+    } finally {
+      if (mounted) setState(() => _loadingProfile = false);
+    }
+  }
+
+  void _startTimer() {
+    _timer?.cancel();
+    // Find parked booking
+    try {
+        final parked = _activeBookings.firstWhere((b) => b.status == 'parked');
+        if (parked.parkStartTime != null) {
+            _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+                if (mounted) {
+                    setState(() {
+                        _parkDuration = DateTime.now().difference(parked.parkStartTime!);
+                    });
+                }
+            });
+        }
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1695,7 +2226,102 @@ class _ProfilePageState extends State<ProfilePage> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 24),
+
+                    // --- MY VEHICLE / ACTIVE PARKING ---
+                    Text('My Vehicle', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    if (_activeBookings.isEmpty) 
+                       Card(child: ListTile(title: Text('No active parking or bookings'), leading: Icon(Icons.directions_car)))
+                    else 
+                       ..._activeBookings.map((b) {
+                          final isParked = b.status == 'parked';
+                          final dur = _parkDuration;
+                          final hours = dur.inHours;
+                          final mins = dur.inMinutes % 60;
+                          final secs = dur.inSeconds % 60;
+                          
+                          return Card(
+                            color: isParked ? Colors.green.shade50 : Colors.blue.shade50,
+                            child: Padding(
+                                padding: const EdgeInsets.all(12),
+                                child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                        Row(children: [
+                                            Icon(isParked ? Icons.local_parking : Icons.schedule, color: Colors.black),
+                                            SizedBox(width: 8),
+                                            Text(isParked ? 'Parked' : 'Confirmed Booking', style: TextStyle(fontWeight: FontWeight.bold))
+                                        ]),
+                                        if (isParked) ...[
+                                            const SizedBox(height: 8),
+                                            Text('Duration: ${hours}h ${mins}m ${secs}s', style: const TextStyle(fontSize: 18)),
+                                            const SizedBox(height: 8),
+                                            OutlinedButton.icon(
+                                                onPressed: () async {
+                                                    // Fetch space location to navigate
+                                                    try {
+                                                       final spaceData = await Db.c.from('spaces').select().eq('id', b.spaceId).single();
+                                                       final space = ParkingSpace.fromMap(spaceData);
+                                                       final lat = space.location.latitude;
+                                                       final lng = space.location.longitude;
+                                                       final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+                                                       launchUrl(uri, mode: LaunchMode.externalApplication);
+                                                    } catch (e) {
+                                                       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not locate space')));
+                                                    }
+                                                }, 
+                                                icon: const Icon(Icons.map), label: const Text('Location')
+                                            )
+                                        ] else ...[
+                                            const SizedBox(height: 8),
+                                            const Text('Go to Home to start parking when you arrive.'),
+                                        ]
+                                    ]
+                                )
+                            )
+                          );
+                       }),
+
+                    const SizedBox(height: 24),
+
+                    // --- PARKING REQUESTS (Owner) ---
+                    if (_requests.isNotEmpty) ...[
+                        Text('Parking Requests', style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 8),
+                        ..._requests.map((req) {
+                            final b = req['booking'] as Booking;
+                            return Card(
+                                child: ListTile(
+                                    leading: const Icon(Icons.notifications_active, color: Colors.orange),
+                                    title: Text('${req['booker_name']} wants to park ${req['space_title']}'),
+                                    subtitle: Text('Vehicle: ${b.vehicleType}'),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        TextButton(
+                                          onPressed: () async {
+                                            await Db.updateBookingStatus(b.id, 'rejected');
+                                            await _load();
+                                          }, // Reject
+                                          child: const Text('Reject', style: TextStyle(color: Colors.red)),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () async {
+                                              await Db.updateBookingStatus(b.id, 'confirmed');
+                                              await _load();
+                                              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Booking Confirmed')));
+                                          },
+                                          child: const Text('Confirm'),
+                                        ),
+                                      ],
+                                    ),
+                                ),
+                            );
+                        }),
+                        const SizedBox(height: 24),
+                    ],
+
                     Text(
                       'Your Posted Spaces',
                       style: Theme.of(context).textTheme.titleMedium,
